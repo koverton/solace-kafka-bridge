@@ -1,4 +1,5 @@
 #!/bin/bash
+cd `dirname $0`/..
 
 cp=`mvn -q exec:exec -Dexec.executable=echo -Dexec.args="%classpath"`
 
