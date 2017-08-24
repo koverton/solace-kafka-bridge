@@ -34,10 +34,12 @@ public class KafkaConnector<K,V> {
         }
         else {
             for(ConsumerRecord<K,V> record : consumerRecords) {
-                if (listener != null)
+                if (listener != null) {
                     listener.onMessage(record.topic(), record.partition(), record.key(), record.value());
+                    consumer.commitAsync();
+                    // Don't checkpoint with Kafka server if the bridge hasn't really bridged the message
+                }
             }
-            consumer.commitAsync();
         }
 
     }
