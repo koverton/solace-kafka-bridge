@@ -1,43 +1,62 @@
 package com.solacesystems.poc;
 
 import com.solacesystems.jcsmp.*;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.common.serialization.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Properties;
 
-public class SolaceConnector<K,V> {
+class SolaceConnector<K,V> {
     private static final Logger logger = LoggerFactory.getLogger(SolaceConnector.class);
 
-    public final static String HDR_KAFKA_KEY = "solkaf_bridge_hdr_key";
+    private static final int MAX_CACHED_MSGS = 256;
 
     public SolaceConnector(Properties properties) throws Exception {
         listener = null;
-        getSerializers(properties);
+
+        msgHelper = new MsgHelper<K,V>(properties);
 
         final JCSMPProperties solprops = new JCSMPProperties();
         for (String name : properties.stringPropertyNames()) {
             Object value = properties.getProperty(name);
             solprops.setProperty(name, value);
         }
+        solprops.setIntegerProperty(JCSMPProperties.PUB_ACK_WINDOW_SIZE, 50);
         session = JCSMPFactory.onlyInstance().createSession(solprops);
 
-        producer = session.getMessageProducer(new JCSMPStreamingPublishEventHandler() {
-
-            public void responseReceived(String messageID) {
-                // System.out.println("Producer received response for msg: " + messageID);
-                lastMsgAcked = messageID;
-            }
-
-            public void handleError(String messageID, JCSMPException e, long timestamp) {
-                System.out.printf("Producer received error for msg: %s@%s - %s%n",
-                        messageID,timestamp,e);
-                // TODO: retrieve from the Kafka connector
-            }
-        });
+        producer = session.getMessageProducer(
+                new JCSMPStreamingPublishCorrelatingEventHandler() {
+                    @Override
+                    public void handleErrorEx(Object key, JCSMPException e, long timestamp) {
+                        logger.error("Solace Producer received error for msg: {}@{} - {}",
+                                key, timestamp, e);
+                    }
+                    @Override
+                    public void responseReceivedEx(Object key) {
+                        SolaceSentMessageState inbound = (SolaceSentMessageState) key;
+                        logger.debug("Producer received response for msg: {}", inbound.getMessageID());
+                        SolaceSentMessageState state = usedMsgBuffer.remove();
+                        if (inbound.getMessageID().equals(state.getMessageID())) {
+                            logger.debug("ACK'd message equals allocated message {}", state.getMessageID());
+                            // TODO: ACK the message back to the Kafka connector here if we find a way
+                            // Put the ack'd message back into our list of Free messages to be reused
+                            freeMsgBuffer.append(state);
+                        }
+                        else {
+                            // If these don't match, something bad is going on
+                            logger.error("MAYDAY! Latest ACK ID {} does not match earliest sent ID {}; either out of sequence or worse.",
+                                    inbound.getMessageID(), state.getMessageID());
+                        }
+                    }
+                    @Override
+                    public void responseReceived(String messageID) {
+                        logger.error("Not expected to be called on standard JCSMPStreamingPublishEventHandler because Correlation key was set.");
+                    }
+                    @Override
+                    public void handleError(String messageID, JCSMPException e, long timestamp) {
+                        logger.error("Solace Producer received error for msg: {}@{} - {}", messageID, timestamp, e);
+                    }
+                });
     }
 
     public void start(String sourceQueueName, ConnectionListener<K,V> callback) throws JCSMPException {
@@ -45,7 +64,7 @@ public class SolaceConnector<K,V> {
 
         ConsumerFlowProperties queueProps = new ConsumerFlowProperties();
         queueProps.setEndpoint(JCSMPFactory.onlyInstance().createQueue(sourceQueueName));
-        queueProps.setAckMode(JCSMPProperties.SUPPORTED_MESSAGE_ACK_AUTO);
+        queueProps.setAckMode(JCSMPProperties.SUPPORTED_MESSAGE_ACK_CLIENT);
         session.connect();
         consumer = session.createFlow(
                 new XMLMessageListener() {
@@ -55,19 +74,23 @@ public class SolaceConnector<K,V> {
                         String topic = msg.getDestination().getName();
 
                         // Deserialize the key
-                        K key = getKey(msg, topic);
+                        K key = msgHelper.getKey(msg, topic);
 
                         // Deserialize the value
-                        byte[] bytes = new byte[ msg.getAttachmentContentLength() ];
-                        msg.readAttachmentBytes(bytes);
-                        V value = (V) valDeserializer.deserialize(topic, bytes);
+                        V value = msgHelper.getValue(msg, topic);
 
                         // Invoke the listener
-                        listener.onMessage(topic, null, key, value);
+                        try {
+                            listener.onMessage(msg, null, topic, key, value);
+                        }
+                        catch(Exception e) {
+                            e.printStackTrace();
+                        }
                     }
 
                     @Override
                     public void onException(JCSMPException e) {
+                        logger.error("EXCEPTION receiving Solace messages: {}", e);
                     }
                 },
                 queueProps,
@@ -86,62 +109,31 @@ public class SolaceConnector<K,V> {
         consumer.start();
     }
 
-    public void send(String topicName, K key, V payload) throws JCSMPException {
-        BytesXMLMessage msg = producer.createBytesXMLMessage();
-        putKey(msg, topicName, key);
-        msg.writeAttachment( valSerializer.serialize(topicName, payload) );
-        msg.setDeliveryMode(DeliveryMode.PERSISTENT);
-
-        producer.send(msg, JCSMPFactory.onlyInstance().createTopic(topicName));
+    public void send(int partition, String topicName, K key, V payload) throws JCSMPException {
+        SolaceSentMessageState msgState = null;
+        if (freeMsgBuffer.used() > 0)
+            msgState = freeMsgBuffer.remove();
+        else
+            msgState = new SolaceSentMessageState();
+        msgHelper.populateMessage(msgState, partition, topicName, key, payload);
+        usedMsgBuffer.append(msgState);
+        producer.send(msgState.getMessage(), msgState.getDestination());
     }
 
-    private void putKey(BytesXMLMessage msg, String topic, K key) {
-        SDTMap map = producer.createMap();
-        try {
-            map.putBytes(HDR_KAFKA_KEY, keySerializer.serialize(topic, key));
-        }
-        catch(SDTException ex) {
-            ex.printStackTrace();
-        }
-        msg.setProperties(map);
-    }
 
-    private K getKey(BytesXMLMessage msg, String topic) {
-        K key = null;
-        SDTMap props = msg.getProperties();
-        if (props.containsKey(HDR_KAFKA_KEY)) {
-            try {
-                byte[] keybytes = props.getBytes(HDR_KAFKA_KEY);
-                key = (K) keyDeserializer.deserialize(topic, keybytes);
-            }
-            catch(SDTException ex) {
-                ex.printStackTrace();
-                key = null;
-            }
-        }
-        return key;
-    }
-
-    private void getSerializers(Properties props) throws Exception {
-        String keyDeserName = props.getProperty(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG);
-        String valDeserName = props.getProperty(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
-        String keySerName   = props.getProperty(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG);
-        String valSerName   = props.getProperty(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG);
-
-        keyDeserializer = (Deserializer<K>)Class.forName(keyDeserName).newInstance();
-        valDeserializer = (Deserializer<V>)Class.forName(valDeserName).newInstance();
-        keySerializer   = (Serializer<K>)  Class.forName(keySerName).newInstance();
-        valSerializer   = (Serializer<V>)  Class.forName(valSerName).newInstance();
-    }
-
+    // Solace session
     final private JCSMPSession session;
-    private XMLMessageProducer producer;
-    private ConnectionListener<K,V> listener;
-    private FlowReceiver consumer;
-    private String lastMsgAcked;
 
-    private Deserializer<K> keyDeserializer;
-    private Deserializer<V> valDeserializer;
-    private Serializer<K>   keySerializer;
-    private Serializer<V>   valSerializer;
+    // Solace producer
+    private XMLMessageProducer producer;
+    private final RingBuffer<SolaceSentMessageState> usedMsgBuffer = new RingBuffer<>(SolaceSentMessageState.class, MAX_CACHED_MSGS);
+    private final RingBuffer<SolaceSentMessageState> freeMsgBuffer = new RingBuffer<>(SolaceSentMessageState.class, MAX_CACHED_MSGS);
+
+    // Solace listener
+    private FlowReceiver consumer;
+    // Client listener interested in Solace messages
+    private ConnectionListener<K,V> listener;
+
+    // Encapsulates message handling, serialization
+    private final MsgHelper<K,V> msgHelper;
 }

@@ -1,8 +1,11 @@
 package com.solacesystems.poc;
 
+import com.solacesystems.jcsmp.BytesXMLMessage;
 import com.solacesystems.jcsmp.JCSMPException;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.slf4j.Logger;
@@ -24,7 +27,6 @@ import java.util.Properties;
 public class BridgingConnector
 {
     private static final Logger logger = LoggerFactory.getLogger(BridgingConnector.class);
-    private static final int MAX_RESENDS = 5;
 
     // Pass-through bridges sending raw bytes across; at the ends,
     // use Kafka serializers/deserializers but no point in doing
@@ -37,34 +39,43 @@ public class BridgingConnector
         solaceConn = new SolaceConnector<>(properties);
     }
 
-    public void start(String solaceQueueName, String... kafkaTopics) throws Exception {
+    public void start(final String solaceQueueName, String... kafkaTopics) throws Exception {
         List<String> kafkaTopicList = Arrays.asList(kafkaTopics);
 
         logger.info("Connecting to Solace...");
         solaceConn.start(solaceQueueName, new ConnectionListener<byte[], byte[]>() {
             @Override
-            public void onMessage(String topic, Integer partition, byte[] key, byte[] value) {
-                kafkaConn.send(topic, key, value);
+            public boolean onMessage(Object source, Integer partition, String topic, byte[] key, byte[] value) {
+                boolean result = false;
+                try {
+                    kafkaConn.send(topic, key, value, new KafkaPublishCompletion((BytesXMLMessage)source));
+                    result = true;
+                } catch (Exception ex) {
+                    logger.error("FAILED to send to Solace", ex);
+                    result = false;
+                }
+                return result;
             }
         });
         logger.info("Connecting to kafka ...");
-        kafkaConn.start(kafkaTopicList, new ConnectionListener<byte[], byte[]>() {
-            @Override
-            public void onMessage(String topic, Integer partition, byte[] key, byte[] value) {
-            if (logger.isTraceEnabled())
-                logger.trace("Got Kafka message; sending over Solace.");
-            int attempts = 0;
-            while(attempts < MAX_RESENDS) {
-                try {
-                    solaceConn.send(topic, key, value);
-                    attempts = MAX_RESENDS;
-                } catch (JCSMPException solex) {
-                    logger.error("FAILED to send to Solace, attempt {}; trying again.", attempts, solex);
-                    attempts++;
-                }
-            }
-            }
-        });
+        kafkaConn.start(kafkaTopicList,
+                new ConnectionListener<byte[], byte[]>() {
+                    @Override
+                    public boolean onMessage(Object source, Integer partition, String topic, byte[] key, byte[] value) {
+                        logger.trace("Got Kafka message; sending over Solace.");
+                        boolean result = false;
+                        try {
+                            solaceConn.send(partition, topic, key, value);
+                            result = true;
+                        }
+                        catch(JCSMPException ex) {
+                            logger.error("EXCEPTION publishing msg to solace", ex);
+                            ex.printStackTrace();
+                            result = false;
+                        }
+                        return result;
+                    }
+                });
         logger.info("Kafka client started.");
 
     }
