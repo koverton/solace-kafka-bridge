@@ -18,8 +18,8 @@ specified on the commandline and include:
 
 `bin/run-bridge.sh <propsfile> <solace-queue> <kafka-topics ...>`
 - path/to/bridge.properties
-- Solace bridge queue name
-- List of Kafka topics to bridge
+- Solace bridge queue name for topics bridged from Solace to Kafka
+- List of Kafka topics to bridge from Kafka to Solace
 
 
 ### Example Configuration Properties
