@@ -17,7 +17,7 @@ to Kafka and Solace (further documentation below). Other variables can be
 specified on the commandline and include:
 
 `bin/run-bridge.sh <propsfile> <solace-queue> <kafka-topics ...>`
-- path/to/bridge.properties
+- path/to/bridge.properties modified to match your Kafka and Solace connectivity
 - Solace bridge queue name for topics bridged from Solace to Kafka
 - List of Kafka topics to bridge from Kafka to Solace
 
