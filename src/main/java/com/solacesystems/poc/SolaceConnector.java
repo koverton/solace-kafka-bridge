@@ -16,6 +16,7 @@ class SolaceConnector<K,V> {
 
         msgHelper = new MsgHelper<K,V>(properties);
 
+        this.sourceQueue = properties.getProperty(BridgeProperties.PROP_SOLACE_BRIDGE_QUEUE);
         final JCSMPProperties solprops = new JCSMPProperties();
         for (String name : properties.stringPropertyNames()) {
             Object value = properties.getProperty(name);
@@ -59,11 +60,11 @@ class SolaceConnector<K,V> {
                 });
     }
 
-    public void start(String sourceQueueName, ConnectionListener<K,V> callback) throws JCSMPException {
+    public void start(ConnectionListener<K,V> callback) throws JCSMPException {
         listener = callback;
 
         ConsumerFlowProperties queueProps = new ConsumerFlowProperties();
-        queueProps.setEndpoint(JCSMPFactory.onlyInstance().createQueue(sourceQueueName));
+        queueProps.setEndpoint(JCSMPFactory.onlyInstance().createQueue(this.sourceQueue));
         queueProps.setAckMode(JCSMPProperties.SUPPORTED_MESSAGE_ACK_CLIENT);
         session.connect();
         consumer = session.createFlow(
@@ -120,6 +121,21 @@ class SolaceConnector<K,V> {
         producer.send(msgState.getMessage(), msgState.getDestination());
     }
 
+    public void stopFlow() {
+        if (consumer != null)
+            consumer.stop();
+    }
+
+    public void startFlow() {
+        try {
+            if (consumer != null)
+                consumer.start();
+        }
+        catch(JCSMPException e) {
+            logger.error("FAILED to start consumer on {}", consumer.getEndpoint().getName());
+            e.printStackTrace();
+        }
+    }
 
     // Solace session
     final private JCSMPSession session;
@@ -133,6 +149,7 @@ class SolaceConnector<K,V> {
     private FlowReceiver consumer;
     // Client listener interested in Solace messages
     private ConnectionListener<K,V> listener;
+    private String sourceQueue;
 
     // Encapsulates message handling, serialization
     private final MsgHelper<K,V> msgHelper;

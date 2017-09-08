@@ -17,4 +17,14 @@ public interface ConnectionListener<K, V> {
      * @return False on any failure while processing the message.
      */
     public boolean onMessage(Object source, Integer partition, String topic, K key, V value) throws Exception;
+
+    /**
+     * Called when the underlying listener session becomes connected.
+     */
+    public void onConnected();
+
+    /**
+     * Called when the underlying listener session becomes disconnected.
+     */
+    public void onDisconnected();
 }

@@ -21,6 +21,7 @@ class KafkaConnector<K,V> {
         // Create the consumer using props.
         consumer = new KafkaConsumer<>(properties);
         producer = new KafkaProducer<>(properties);
+        topics = (List<String>) properties.get(BridgeProperties.PROP_KAFKA_BRIDGE_TOPICS);
         listener = null;
     }
 
@@ -29,10 +30,10 @@ class KafkaConnector<K,V> {
      * @param sourceTopics List of topics to subscribe to.
      * @param consumerCallback Callback to be invoked when messages are consumed from Kafka.
      */
-    public void start(List<String> sourceTopics, ConnectionListener<K,V> consumerCallback) {
+    public void start(ConnectionListener<K,V> consumerCallback) {
         listener = consumerCallback;
         // Subscribe to the topic.
-        consumer.subscribe(sourceTopics);
+        consumer.subscribe(this.topics);
     }
 
     /**
@@ -78,5 +79,6 @@ class KafkaConnector<K,V> {
 
     final private Consumer<K,V> consumer;
     final private Producer<K,V> producer;
+    private List<String> topics;
     private ConnectionListener<K,V> listener;
 }

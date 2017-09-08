@@ -1,7 +1,7 @@
 #!/bin/bash -x
 
 if [ "$#" -lt 3 ]; then
-	echo "	USAGE: $0 <path/to/client-connect.properties> <solace-bridge-queue> <kafka-bridge-topic-list> <...>"
+	echo "	USAGE: $0 <path/to/client-connect.properties>"
 	echo ""
 	exit 1
 fi

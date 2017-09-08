@@ -3,15 +3,12 @@ package com.solacesystems.poc;
 import com.solacesystems.jcsmp.BytesXMLMessage;
 import com.solacesystems.jcsmp.JCSMPException;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 
@@ -34,21 +31,42 @@ public class BridgingConnector
     private KafkaConnector<byte[],byte[]>  kafkaConn;
     private SolaceConnector<byte[],byte[]> solaceConn;
 
-    public BridgingConnector(Properties properties) throws Exception {
+    private TopicTranslator kafkaSolaceTranslator;
+    private TopicTranslator solaceKafkaTranslator;
+
+    private boolean solaceConnected = false;
+    private boolean kafkaConnected  = false;
+
+    BridgingConnector(Properties properties) throws Exception {
         kafkaConn  = new KafkaConnector<>(properties);
         solaceConn = new SolaceConnector<>(properties);
+        kafkaSolaceTranslator = new TopicStringTranslator((List<String[]>)
+                        properties.get(BridgeProperties.PROP_KAFKA_SOLACE_TOPIC_TRANSLATIONS));
+        solaceKafkaTranslator = new TopicStringTranslator((List<String[]>)
+                        properties.get(BridgeProperties.PROP_SOLACE_KAFKA_TOPIC_TRANSLATIONS));
     }
 
-    public void start(final String solaceQueueName, String... kafkaTopics) throws Exception {
-        List<String> kafkaTopicList = Arrays.asList(kafkaTopics);
+    public static BridgingConnector newBridgingConnector(String propertyFilePath) throws Exception {
+        Properties props = IOHelper.readPropsFile(propertyFilePath);
+        // These are always pure pass-through, don't let users configure them
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
 
+        return new BridgingConnector(props);
+    }
+
+    public void start() throws Exception {
         logger.info("Connecting to Solace...");
-        solaceConn.start(solaceQueueName, new ConnectionListener<byte[], byte[]>() {
+        solaceConn.start(
+                new ConnectionListener<byte[], byte[]>() {
             @Override
             public boolean onMessage(Object source, Integer partition, String topic, byte[] key, byte[] value) {
                 boolean result = false;
                 try {
-                    kafkaConn.send(topic, key, value, new KafkaPublishCompletion((BytesXMLMessage)source));
+                    String kafkaTopic = solaceKafkaTranslator.translate(topic);
+                    kafkaConn.send(kafkaTopic, key, value, new KafkaPublishCompletion((BytesXMLMessage)source));
                     result = true;
                 } catch (Exception ex) {
                     logger.error("FAILED to send to Solace", ex);
@@ -56,16 +74,25 @@ public class BridgingConnector
                 }
                 return result;
             }
+            @Override
+            public void onConnected() {
+                solaceConnected = true;
+            }
+            @Override
+            public void onDisconnected() {
+                solaceConnected = false;
+            }
         });
         logger.info("Connecting to kafka ...");
-        kafkaConn.start(kafkaTopicList,
+        kafkaConn.start(
                 new ConnectionListener<byte[], byte[]>() {
                     @Override
                     public boolean onMessage(Object source, Integer partition, String topic, byte[] key, byte[] value) {
                         logger.trace("Got Kafka message; sending over Solace.");
                         boolean result = false;
+                        String solaceTopic = kafkaSolaceTranslator.translate(topic);
                         try {
-                            solaceConn.send(partition, topic, key, value);
+                            solaceConn.send(partition, solaceTopic, key, value);
                             result = true;
                         }
                         catch(JCSMPException ex) {
@@ -74,6 +101,16 @@ public class BridgingConnector
                             result = false;
                         }
                         return result;
+                    }
+                    @Override
+                    public void onConnected() {
+                        kafkaConnected = true;
+                        solaceConn.startFlow();
+                    }
+                    @Override
+                    public void onDisconnected() {
+                        kafkaConnected = false;
+                        solaceConn.stopFlow();
                     }
                 });
         logger.info("Kafka client started.");
@@ -85,34 +122,27 @@ public class BridgingConnector
         while(true) {
             if (logger.isTraceEnabled())
                 logger.trace(" Polling " + l++);
-            kafkaConn.poll(1000);
+            if (solaceConnected) {
+                kafkaConn.poll(1000);
+            }
+            else {
+                logger.warn("Skipping Kafka poll because Solace is disconnected.");
+                try { Thread.sleep(1000); } catch(InterruptedException e) {}
+            }
         }
     }
 
     public static void main(String[] args) {
-        if (args.length < 3) {
-            System.out.println("    USAGE: <kafka-solace-props-file.properties> <solace queue> <kafka topics ...>");
-            System.out.println("");
+        if (args.length < 1) {
+            System.out.println("\tUSAGE: <path/to/kafka-solace-props-file.properties>");
             System.out.println("");
             System.exit(1);
         }
 
-        Properties props = IOHelper.readPropsFile(args[0]);
-        // These are always pure pass-through, don't let users configure them
-        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
-
-        String queueName = args[1];
-        String[] topics = new String[ args.length - 2 ];
-        for(int i = 2; i < args.length; i++)
-            topics[i-2] = args[i];
-
         try {
-            BridgingConnector bridge = new BridgingConnector(props);
+            BridgingConnector bridge = BridgingConnector.newBridgingConnector(args[0]);
 
-            bridge.start(queueName, topics);
+            bridge.start();
 
             bridge.run();
         }
