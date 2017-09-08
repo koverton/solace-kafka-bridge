@@ -91,4 +91,3 @@ set of topic pairs, where each pair is delimited by a colon character (':'). E.g
 _Regex Translation_: [NOT IMPLEMENTED YET] This will be a more complex translation 
 mechanism where each configured translation is defined as a matching regex and a 
 translation regex. 
-
