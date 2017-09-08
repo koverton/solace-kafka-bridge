@@ -50,9 +50,9 @@ The following configuration entries determine the bridge behavior.
 
 ### Solace Bridge Queue
 
-Config Name: `sol_bridge_queue`
-Data Type: String
-Description: This is the name of the queue used to bridge Solace data into Kafka. 
+* Config Name: `sol_bridge_queue`
+* Data Type: String
+* Description: This is the name of the queue used to bridge Solace data into Kafka. 
 The bridge's Solace connection will bind to this queue, consume messages and publish 
 them to the Kafka connection.
 
@@ -65,16 +65,16 @@ will consume messages on these topics and publish them to the Solace connection.
 
 ### Kafka to Solace Topic Translations
 
-Config Name: `bridge_kafka_sol_topic_trans`
-Data Type: Can vary depending upon translation type (see Translation Types below).
-Description: Defines translation mappings for Kafka topics to be translated into 
+* Config Name: `bridge_kafka_sol_topic_trans`
+* Data Type: Can vary depending upon translation type (see Translation Types below).
+* Description: Defines translation mappings for Kafka topics to be translated into 
 Solace topics.
 
 ### Solace to Kafka Topic Translations
 
-Config Name: `bridge_sol_kafka_topic_trans`
-Data Type: Can vary depending upon translation type (see Translation Types below).
-Description: Defines translation mappings for Solace topics to be translated into 
+* Config Name: `bridge_sol_kafka_topic_trans`
+* Data Type: Can vary depending upon translation type (see Translation Types below).
+* Description: Defines translation mappings for Solace topics to be translated into 
 Kafka topics.
 
 ## Translation Types
