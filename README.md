@@ -1,6 +1,10 @@
 # solace-kafka-bridge
 Basic sample bidirectional bridge kafka&lt;->solace
 
+## Prerequisites
+
+Assumes you have a Kafka/Zookeeper deployment and Solace Message Router deployment already 
+that you'd like to bridge.
 
 ## BUILDING
 
