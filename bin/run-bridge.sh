@@ -1,6 +1,6 @@
 #!/bin/bash -x
 
-if [ "$#" -lt 3 ]; then
+if [ "$#" -lt 1 ]; then
 	echo "	USAGE: $0 <path/to/client-connect.properties>"
 	echo ""
 	exit 1
