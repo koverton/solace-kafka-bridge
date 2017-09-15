@@ -1,13 +1,12 @@
 package com.solacesystems.poc;
 
 
+import org.slf4j.Logger;
+
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Properties;
+import java.util.*;
 
 class IOHelper {
 
@@ -30,6 +29,13 @@ class IOHelper {
             }
         }
         return props;
+    }
+
+    static void dumpProperties(Properties props) {
+        for (Map.Entry<Object, Object> e : props.entrySet()) {
+            System.err.println("\t\t" + e.getKey() + " = " + e.getValue());
+        }
+        System.err.println("");
     }
 
     static void fixPropertyTypes(Properties props) {

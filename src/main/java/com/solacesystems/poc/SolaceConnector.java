@@ -23,6 +23,13 @@ class SolaceConnector<K,V> {
             solprops.setProperty(name, value);
         }
         solprops.setIntegerProperty(JCSMPProperties.PUB_ACK_WINDOW_SIZE, 50);
+        solprops.setBooleanProperty(JCSMPProperties.GENERATE_RCV_TIMESTAMPS, true);
+        solprops.setBooleanProperty(JCSMPProperties.GENERATE_SEND_TIMESTAMPS, true);
+        JCSMPChannelProperties channelProperties =
+                (JCSMPChannelProperties) solprops.getProperty(JCSMPProperties.CLIENT_CHANNEL_PROPERTIES);
+        channelProperties.setConnectRetries(100);
+        channelProperties.setReconnectRetries(-1);
+        channelProperties.setReconnectRetryWaitInMillis(200);
         session = JCSMPFactory.onlyInstance().createSession(solprops);
 
         producer = session.getMessageProducer(
@@ -66,6 +73,7 @@ class SolaceConnector<K,V> {
         ConsumerFlowProperties queueProps = new ConsumerFlowProperties();
         queueProps.setEndpoint(JCSMPFactory.onlyInstance().createQueue(this.sourceQueue));
         queueProps.setAckMode(JCSMPProperties.SUPPORTED_MESSAGE_ACK_CLIENT);
+        queueProps.setActiveFlowIndication(true);
         session.connect();
         consumer = session.createFlow(
                 new XMLMessageListener() {
@@ -101,9 +109,11 @@ class SolaceConnector<K,V> {
                     public void handleEvent(Object o, FlowEventArgs args) {
                         if (args.getEvent().equals(FlowEvent.FLOW_ACTIVE)) {
                             // TODO: Active Flow Indication
+                            listener.onConnected();
                         }
-                        else {
+                        else if (args.getEvent().equals(FlowEvent.FLOW_INACTIVE)) {
                             // TODO: INACTIVE flow
+                            listener.onDisconnected();
                         }
                     }
                 });

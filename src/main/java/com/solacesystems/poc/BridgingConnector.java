@@ -48,6 +48,7 @@ public class BridgingConnector
 
     public static BridgingConnector newBridgingConnector(String propertyFilePath) throws Exception {
         Properties props = IOHelper.readPropsFile(propertyFilePath);
+        IOHelper.dumpProperties(props);
         // These are always pure pass-through, don't let users configure them
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
