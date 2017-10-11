@@ -6,9 +6,6 @@ import java.nio.BufferUnderflowException;
 /**
  * HACKED RingBuffer to track state objects for sent message.
  *
- * THIS IS NOT THREAD SAFE. I just didn't bother putting in any locking
- * because of the natural sequence of sending messages and receiving acks.
- *
  * @param <T>
  */
 class RingBuffer<T> {
@@ -19,8 +16,10 @@ class RingBuffer<T> {
      * @param capacity Size of the underlying buffer as a number of slots available for storing items.
      */
     public RingBuffer(Class<T> clazz, int capacity) {
-        this.capacity = capacity;
-        buffer = (T[]) Array.newInstance(clazz, capacity);
+        synchronized (lock) {
+            this.capacity = capacity;
+            buffer = (T[]) Array.newInstance(clazz, capacity);
+        }
     }
 
     /**
@@ -30,10 +29,12 @@ class RingBuffer<T> {
      */
     public boolean append(T item) {
         if (used == capacity) return false;
-        buffer[addpos++] = item;
-        if (addpos == capacity)
-            addpos = 0;
-        used++;
+        synchronized (lock) {
+            buffer[addpos++] = item;
+            if (addpos == capacity)
+                addpos = 0;
+            used++;
+        }
         return true;
     }
 
@@ -44,11 +45,15 @@ class RingBuffer<T> {
      */
     public T remove() throws BufferUnderflowException {
         if (used <= 0) throw new BufferUnderflowException();
-        T item = buffer[rempos++];
-        if (rempos == capacity)
-            rempos = 0;
-        used--;
-        return item;
+        synchronized (lock) {
+            int localpos = rempos++;
+            T item = buffer[localpos];
+            if (rempos == capacity)
+                rempos = 0;
+            used--;
+            buffer[localpos] = null;
+            return item;
+        }
     }
 
     /**
@@ -80,4 +85,6 @@ class RingBuffer<T> {
     private int used   = 0;
     private int addpos = 0;
     private int rempos = 0;
+
+    private final Object lock = new Object();
 }

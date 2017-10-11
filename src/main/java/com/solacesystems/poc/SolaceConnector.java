@@ -9,7 +9,7 @@ import java.util.Properties;
 class SolaceConnector<K,V> {
     private static final Logger logger = LoggerFactory.getLogger(SolaceConnector.class);
 
-    private static final int MAX_CACHED_MSGS = 256;
+    private static final int MAX_CACHED_MSGS = 2048;
 
     public SolaceConnector(Properties properties) throws Exception {
         listener = null;
@@ -22,9 +22,9 @@ class SolaceConnector<K,V> {
             Object value = properties.getProperty(name);
             solprops.setProperty(name, value);
         }
-        solprops.setIntegerProperty(JCSMPProperties.PUB_ACK_WINDOW_SIZE, 50);
-        solprops.setBooleanProperty(JCSMPProperties.GENERATE_RCV_TIMESTAMPS, true);
-        solprops.setBooleanProperty(JCSMPProperties.GENERATE_SEND_TIMESTAMPS, true);
+        solprops.setIntegerProperty(JCSMPProperties.PUB_ACK_WINDOW_SIZE, 255);
+        //solprops.setBooleanProperty(JCSMPProperties.GENERATE_RCV_TIMESTAMPS, true);
+        //solprops.setBooleanProperty(JCSMPProperties.GENERATE_SEND_TIMESTAMPS, true);
         JCSMPChannelProperties channelProperties =
                 (JCSMPChannelProperties) solprops.getProperty(JCSMPProperties.CLIENT_CHANNEL_PROPERTIES);
         channelProperties.setConnectRetries(100);
@@ -44,11 +44,12 @@ class SolaceConnector<K,V> {
                         SolaceSentMessageState inbound = (SolaceSentMessageState) key;
                         logger.debug("Producer received response for msg: {}", inbound.getMessageID());
                         SolaceSentMessageState state = usedMsgBuffer.remove();
-                        if (inbound.getMessageID().equals(state.getMessageID())) {
-                            logger.debug("ACK'd message equals allocated message {}", state.getMessageID());
+                        if (inbound.getMsgID() == state.getMsgID()) {
+                            logger.debug("ACK'd message equals allocated message {}", inbound.getMessageID());
                             // TODO: ACK the message back to the Kafka connector here if we find a way
                             // Put the ack'd message back into our list of Free messages to be reused
-                            freeMsgBuffer.append(state);
+                            logger.debug("Putting message {} back in the msg-pool for re-use", inbound.getMessageID());
+                            freeMsgBuffer.append(inbound);
                         }
                         else {
                             // If these don't match, something bad is going on
@@ -63,6 +64,7 @@ class SolaceConnector<K,V> {
                     @Override
                     public void handleError(String messageID, JCSMPException e, long timestamp) {
                         logger.error("Solace Producer received error for msg: {}@{} - {}", messageID, timestamp, e);
+                        e.printStackTrace();
                     }
                 });
     }
@@ -71,6 +73,8 @@ class SolaceConnector<K,V> {
         listener = callback;
 
         ConsumerFlowProperties queueProps = new ConsumerFlowProperties();
+        queueProps.setWindowedAckMaxSize(255);
+        queueProps.setAckThreshold(20);
         queueProps.setEndpoint(JCSMPFactory.onlyInstance().createQueue(this.sourceQueue));
         queueProps.setAckMode(JCSMPProperties.SUPPORTED_MESSAGE_ACK_CLIENT);
         queueProps.setActiveFlowIndication(true);
@@ -120,14 +124,19 @@ class SolaceConnector<K,V> {
         consumer.start();
     }
 
-    public void send(int partition, String topicName, K key, V payload) throws JCSMPException {
+    public void send(int partition, String topic, K key, V payload) throws JCSMPException {
+        logger.debug("Sending message to Solace with topic {} and key {}", topic, key);
+
         SolaceSentMessageState msgState = null;
         if (freeMsgBuffer.used() > 0)
             msgState = freeMsgBuffer.remove();
-        else
+        else {
             msgState = new SolaceSentMessageState();
-        msgHelper.populateMessage(msgState, partition, topicName, key, payload);
+            allocCount++;
+        }
+        msgHelper.populateMessage(msgState, partition, topic, key, payload);
         usedMsgBuffer.append(msgState);
+        logger.debug("Sending msg: {}", msgState.getMsgID());
         producer.send(msgState.getMessage(), msgState.getDestination());
     }
 
@@ -147,6 +156,15 @@ class SolaceConnector<K,V> {
         }
     }
 
+    public void dumpStats() {
+        System.out.println("Buffers available " +
+                        freeMsgBuffer.used() +
+                        ", used "+
+                        usedMsgBuffer.used() +
+                        ", total alloc'd " +
+                        allocCount);
+    }
+
     // Solace session
     final private JCSMPSession session;
 
@@ -154,6 +172,7 @@ class SolaceConnector<K,V> {
     private XMLMessageProducer producer;
     private final RingBuffer<SolaceSentMessageState> usedMsgBuffer = new RingBuffer<>(SolaceSentMessageState.class, MAX_CACHED_MSGS);
     private final RingBuffer<SolaceSentMessageState> freeMsgBuffer = new RingBuffer<>(SolaceSentMessageState.class, MAX_CACHED_MSGS);
+    private int allocCount = 0;
 
     // Solace listener
     private FlowReceiver consumer;

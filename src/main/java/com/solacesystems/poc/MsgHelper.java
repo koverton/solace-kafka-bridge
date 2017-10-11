@@ -57,7 +57,7 @@ class MsgHelper<K,V> {
         putKey(msg, topicName, key);
         putValue(msg, topicName, payload);
         msg.setCorrelationKey(msgState);
-        msg.setApplicationMessageId(Long.toString(sequence++));
+        msgState.setMsgID(sequence++);
         msgState.setDestination(JCSMPFactory.onlyInstance().createTopic(topicName));
         msgState.setPartition(partition);
     }

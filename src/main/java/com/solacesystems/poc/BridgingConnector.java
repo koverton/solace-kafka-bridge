@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Properties;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * Bridges Kafka <-> Solace traffic bidirectionally.
@@ -120,6 +122,13 @@ public class BridgingConnector
 
     public void run() {
         Long l = 1L;
+        Timer t = new Timer();
+        t.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                solaceConn.dumpStats();
+            }
+        }, 2000L, 2000L);
         while(true) {
             if (logger.isTraceEnabled())
                 logger.trace(" Polling " + l++);

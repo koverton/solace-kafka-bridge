@@ -27,7 +27,6 @@ class KafkaConnector<K,V> {
 
     /**
      * Wireup all callbacks and begin subscribing to Kafka.
-     * @param sourceTopics List of topics to subscribe to.
      * @param consumerCallback Callback to be invoked when messages are consumed from Kafka.
      */
     public void start(ConnectionListener<K,V> consumerCallback) {
@@ -72,7 +71,7 @@ class KafkaConnector<K,V> {
      * @param producerCallback Callback function invoked when this record is acknowledged by Kafka.
      */
     public void send(String topic, K key, V value, Callback producerCallback) throws Exception {
-        logger.debug("Sending message to Kafka with key {}", key);
+        logger.debug("Sending message to Kafka with topic {} and key {}", topic, key);
         producer.send(new ProducerRecord<>(topic, key, value), producerCallback)
                 .get(); // This makes the call synchronous
     }
